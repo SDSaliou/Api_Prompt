@@ -14,16 +14,14 @@ def propose_prompt():
     titre = data['titre']
     desc = data['description']
 
-    keywords = data.get('keywords', '')
-    
     conn = conn_db()
     cur = conn.cursor()
     try:
         user_id=user['id']
         cur.execute("""
-                INSERT INTO prompts (titre, description, id_user, etat, prix, keywords, created, updated) 
-                VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW()) RETURNING id
-            """, (titre, desc, user_id, 'en attente', 1000, keywords))
+                INSERT INTO prompts (titre, description, id_user, etat, prix, date_creee, updated) 
+                VALUES (%s, %s, %s, %s, %s, NOW(), NOW()) RETURNING id
+            """, (titre, desc, user_id, 'en attente', 1000))
             
         prompt_id = cur.fetchone()[0]
         conn.commit()
@@ -35,7 +33,7 @@ def propose_prompt():
         cur.close()
         conn.close()
 
-@prompt_bp.route('/prompts/<int:prompt_id>/validate', methods=['POST'])
+@prompt_bp.route('/prompts/<int:prompt_id>/valide', methods=['POST'])
 @jwt_required()
 def validate_prompt(id_prompt):
     user = get_jwt_identity()
@@ -57,7 +55,7 @@ def validate_prompt(id_prompt):
     
 @prompt_bp.route('/prompts/<int:prompt_id>/review', methods=['POST'])
 @jwt_required()
-def request_review(prompt_id):
+def review(prompt_id):
     user = get_jwt_identity()
     if user['role'] != 'admin':
         return jsonify({'msg': 'Accès interdit'}), 403
@@ -82,7 +80,7 @@ def request_review(prompt_id):
         conn.close()
 @prompt_bp.route('/prompts/<int:prompt_id>/delete', methods=['POST'])
 @jwt_required()
-def request_delete(prompt_id):
+def delete(prompt_id):
     user = get_jwt_identity()
     
     conn = conn_db()
@@ -98,13 +96,11 @@ def request_delete(prompt_id):
             
         owner_id = result[0]
         
-        # Si l'utilisateur est un admin, suppression directe
         if user['role'] == 'admin':
             cur.execute("DELETE FROM prompts WHERE id = %s", (prompt_id,))
             conn.commit()
             return jsonify({'msg': 'Prompt supprimé définitivement'})
         
-        # Si l'utilisateur est le propriétaire, marquer pour suppression
         if user['id'] == owner_id:
             cur.execute("""
                 UPDATE prompts SET etat = 'à supprimer', updated = NOW() 
@@ -121,31 +117,25 @@ def request_delete(prompt_id):
         cur.close()
         conn.close()
 
-@prompt_bp.route('/prompts', methods=['GET'])
+@prompt_bp.route('/prompts/list', methods=['GET'])
 def get_prompts():
     search = request.args.get('search', '')
-    keyword = request.args.get('keyword', '')
     etat = request.args.get('etat', 'activer')
     
     conn = conn_db()
     cur = conn.cursor()
     query = """
-        SELECT id, titre, description, prix, etat, keywords, created 
+        SELECT id, titre, description, prix, etat, date_creee
         FROM prompts 
         WHERE etat = %s
     """
     params = [etat]
     
-    # Ajouter la recherche si demandée
     if search:
         query += " AND (titre ILIKE %s OR description ILIKE %s)"
         params.extend([f'%{search}%', f'%{search}%'])
     
-    # Ajouter le filtrage par mot-clé si demandé
-    if keyword:
-        query += " AND keywords ILIKE %s"
-        params.append(f'%{keyword}%')
-    
+   
     query += " ORDER BY created DESC"
     
     try:
@@ -156,10 +146,9 @@ def get_prompts():
             'id': p[0], 
             'titre': p[1], 
             'description': p[2], 
-            'prix': p[3], 
-            'etat': p[4],
-            'keywords': p[5],
-            'created': p[6].strftime('%Y-%m-%d %H:%M:%S') if p[6] else None
+            'prix': p[4], 
+            'etat': p[3],
+            'date_creee': p[6].strftime('%Y-%m-%d %H:%M:%S') if p[6] else None
         } for p in prompts])
     except Exception as e:
         return jsonify({'error': str(e)}), 400
@@ -175,7 +164,6 @@ def get_admin_prompts():
     if user['role'] != 'admin':
         return jsonify({'msg': 'Accès interdit'}), 403
     
-    # Filtrage optionnel par état
     etat = request.args.get('etat', '')
     
     conn = conn_db()
@@ -184,18 +172,18 @@ def get_admin_prompts():
     try:
         if etat:
             cur.execute("""
-                SELECT p.id, p.titre, p.description, p.prix, p.etat, p.keywords, p.created, u.nom
+                SELECT p.id, p.titre, p.description, p.prix, p.etat, p.date_creee, u.nom
                 FROM prompts p
                 JOIN users u ON p.id_user = u.id
                 WHERE p.etat = %s
-                ORDER BY p.created DESC
+                ORDER BY p.date_creee DESC
             """, (etat,))
         else:
             cur.execute("""
-                SELECT p.id, p.titre, p.description, p.prix, p.etat, p.keywords, p.created, u.nom
+                SELECT p.id, p.titre, p.description, p.prix, p.etat, p.date_creee, u.nom
                 FROM prompts p
                 JOIN users u ON p.id_user = u.id
-                ORDER BY p.created DESC
+                ORDER BY p.date_creee DESC
             """)
         
         prompts = cur.fetchall()
@@ -204,11 +192,10 @@ def get_admin_prompts():
             'id': p[0], 
             'titre': p[1], 
             'description': p[2], 
-            'prix': p[3], 
-            'etat': p[4],
-            'keywords': p[5],
-            'created': p[6].strftime('%Y-%m-%d %H:%M:%S') if p[6] else None,
-            'auteur': p[7]
+            'prix': p[4], 
+            'etat': p[3],
+            'date_creee': p[6].strftime('%Y-%m-%d %H:%M:%S') if p[6] else None,
+            'auteur': p[5]
         } for p in prompts])
     except Exception as e:
         return jsonify({'error': str(e)}), 400
@@ -223,7 +210,7 @@ def get_prompt_detail(prompt_id):
     
     try:
         cur.execute("""
-            SELECT p.id, p.titre, p.description, p.prix, p.etat, p.keywords, p.created, u.nom
+            SELECT p.id, p.titre, p.description, p.prix, p.etat,  p.date_creee, u.nom
             FROM prompts p
             JOIN users u ON p.id_user = u.id
             WHERE p.id = %s
@@ -245,11 +232,10 @@ def get_prompt_detail(prompt_id):
             'id': p[0], 
             'titre': p[1], 
             'description': p[2], 
-            'prix': p[3], 
-            'etat': p[4],
-            'keywords': p[5],
-            'created': p[6].strftime('%Y-%m-%d %H:%M:%S') if p[6] else None,
-            'auteur': p[7],
+            'prix': p[4], 
+            'etat': p[3],
+            'date_creee': p[6].strftime('%Y-%m-%d %H:%M:%S') if p[6] else None,
+            'auteur': p[5],
             'note_moyenne': float(avg_score) if avg_score else 0,
             'nombre_votes': vote_count
         })
@@ -313,7 +299,7 @@ def vote_prompt(prompt_id):
         cur.close()
         conn.close()
 
-@prompt_bp.route('/prompts/<int:prompt_id>/rate', methods=['POST'])
+@prompt_bp.route('/prompts/<int:prompt_id>/note', methods=['POST'])
 @jwt_required()
 def note_prompt(prompt_id):
     user = get_jwt_identity()
@@ -363,8 +349,8 @@ def note_prompt(prompt_id):
         cur.close()
         conn.close()
 
-@prompt_bp.route('/prompts/<int:prompt_id>/buy', methods=['POST'])
-def buy_prompt(prompt_id):
+@prompt_bp.route('/prompts/<int:prompt_id>/acheter', methods=['POST'])
+def achat_prompt(prompt_id):
 
     conn = conn_db()
     cur = conn.cursor()
@@ -391,7 +377,7 @@ def buy_prompt(prompt_id):
         cur.close()
         conn.close()
 
-@prompt_bp.route('/prompts/auto-update-states', methods=['POST'])
+@prompt_bp.route('/prompts/update', methods=['POST'])
 def auto_update_prompt_states():
     conn = conn_db()
     cur = conn.cursor()

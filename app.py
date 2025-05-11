@@ -3,10 +3,12 @@ from flask_jwt_extended import JWTManager
 from auth import auth
 from prompt import prompt_bp
 from datetime import timedelta
+import os
 
 app = Flask(__name__)
-app.config['JWT_SECRET_KEY'] = 'realthiaate'
-app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
+
+app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY','realthiaate')
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
 jwt = JWTManager(app)
 
 @jwt.expired_token_loader
@@ -30,8 +32,8 @@ def missing_token_callback(error):
         'error': 'authorization_required'
     }), 401
 
-app.register_blueprint(auth, url='api/auth')
-app.register_blueprint(prompt_bp, url ='/api')
+app.register_blueprint(auth, url_prefix='/api/auth')
+app.register_blueprint(prompt_bp, url_prefix ='/api')
 
 @app.route('/')
 def index():

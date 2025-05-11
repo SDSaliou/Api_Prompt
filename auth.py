@@ -3,6 +3,7 @@ from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identi
 from conn import conn_db
 import bcrypt
 
+
 auth = Blueprint('auth', __name__)
 
 @auth.route('/inscription', methods=['POST'])
@@ -47,18 +48,25 @@ def login():
     con.close()
 
     if user and bcrypt.checkpw(password.encode('utf-8'), user[3].encode('utf-8')):
-        token = create_access_token(identity={'id': user[0], 'email': email, 'role': user[4]})
+        token = create_access_token(identity=user[0])
         return jsonify({'token': token}), 200
     return jsonify({'message': 'Email ou mot de passe invalide'}), 401
 
 @auth.route('/admin', methods=['GET'])
 @jwt_required()
 def admin():
-    current_user = get_jwt_identity()
-    if current_user['role'] != 'admin':
-        return jsonify({'message': 'Accès refusé'}), 403
-    return jsonify({'message': 'Accès accepté'})
+    user_id = get_jwt_identity()
+    con = conn_db()
+    cur = con.cursor()
+    cur.execute("SELECT role FROM users WHERE id = %s", (user_id,))
+    role = cur.fetchone()[0]
+    cur.close()
+    con.close()
 
+    if role != 'admin':
+        return jsonify({'message': 'Accès refusé'}), 403
+
+    return jsonify({'message': 'Accès accepté'})
 @auth.route('/users', methods=['GET'])
 @jwt_required()
 def get_users():
@@ -107,7 +115,7 @@ def create_group():
         cur.close()
         con.close()
 
-@auth.route('/add-user-to-group', methods=['POST'])
+@auth.route('/add-group', methods=['POST'])
 @jwt_required()
 def add_user_to_group():
     current_user = get_jwt_identity()
@@ -130,3 +138,23 @@ def add_user_to_group():
     finally:
         cur.close()
         con.close()
+
+@auth.route('/logout', methods=['POST'])
+@jwt_required()
+def logout():
+    current_user = get_jwt_identity()
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    
+    conn = conn_db()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM active_sessions WHERE user_id = %s AND token = %s", 
+                   (current_user['id'], token))
+        conn.commit()
+        return jsonify({'message': 'Déconnexion réussie'}), 200
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'message': 'Erreur lors de la déconnexion', 'error': str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
