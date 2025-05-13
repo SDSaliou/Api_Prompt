@@ -1,26 +1,26 @@
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required, get_jwt_identity
+#from flask_jwt_extended import jwt_required, get_jwt_identity
 from conn import conn_db
+from middleware import token_required, create_token
 from verifi import verif_group
 from datetime import datetime, timedelta
 
 prompt_bp = Blueprint('prompt', __name__)
 
 @prompt_bp.route('/prompts', methods=['POST'])
-@jwt_required()
-def propose_prompt():
-    user = get_jwt_identity()
+@token_required
+def propose_prompt(current_user):
     data = request.get_json()
     titre = data['titre']
     desc = data['description']
+    user_id=data['id_user']
 
     conn = conn_db()
     cur = conn.cursor()
     try:
-        user_id=user['id']
         cur.execute("""
-                INSERT INTO prompts (titre, description, id_user, etat, prix, date_creee, updated) 
-                VALUES (%s, %s, %s, %s, %s, NOW(), NOW()) RETURNING id
+                INSERT INTO prompts (titre, description, id_user, etat, prix, date_creee,update) 
+                VALUES (%s, %s, %s, %s,%s, NOW(), NOW()) RETURNING id
             """, (titre, desc, user_id, 'en attente', 1000))
             
         prompt_id = cur.fetchone()[0]
@@ -33,17 +33,16 @@ def propose_prompt():
         cur.close()
         conn.close()
 
-@prompt_bp.route('/prompts/<int:prompt_id>/valide', methods=['POST'])
-@jwt_required()
-def validate_prompt(id_prompt):
-    user = get_jwt_identity()
-    if user['role'] != 'admin':
+@prompt_bp.route('/prompts/<int:id_prompt>/valide', methods=['POST'])
+@token_required
+def validate_prompt(current_user,id_prompt):
+    if current_user['role'] != 'admin':
         return jsonify({'msg': 'Accès interdit'}), 403
 
     conn = conn_db()
     cur = conn.cursor()
     try:
-        cur.execute("UPDATE prompts SET etat = 'activer', updated = NOW() WHERE id = %s", (id_prompt,))
+        cur.execute("UPDATE prompts SET etat = 'activer', update = NOW() WHERE id = %s", (id_prompt,))
         conn.commit()
         return jsonify({'msg': 'Prompt validé'})
     except Exception as e:
@@ -54,10 +53,9 @@ def validate_prompt(id_prompt):
         conn.close()
     
 @prompt_bp.route('/prompts/<int:prompt_id>/review', methods=['POST'])
-@jwt_required()
-def review(prompt_id):
-    user = get_jwt_identity()
-    if user['role'] != 'admin':
+@token_required
+def review(current_user,prompt_id):
+    if current_user['role'] != 'admin':
         return jsonify({'msg': 'Accès interdit'}), 403
     
     data = request.get_json()
@@ -78,10 +76,10 @@ def review(prompt_id):
     finally:
         cur.close()
         conn.close()
+
 @prompt_bp.route('/prompts/<int:prompt_id>/delete', methods=['POST'])
-@jwt_required()
-def delete(prompt_id):
-    user = get_jwt_identity()
+@token_required
+def delete(current_user,prompt_id):
     
     conn = conn_db()
     cur = conn.cursor()
@@ -96,12 +94,12 @@ def delete(prompt_id):
             
         owner_id = result[0]
         
-        if user['role'] == 'admin':
+        if current_user['role'] == 'admin':
             cur.execute("DELETE FROM prompts WHERE id = %s", (prompt_id,))
             conn.commit()
             return jsonify({'msg': 'Prompt supprimé définitivement'})
         
-        if user['id'] == owner_id:
+        if current_user['id'] == owner_id:
             cur.execute("""
                 UPDATE prompts SET etat = 'à supprimer', updated = NOW() 
                 WHERE id = %s
@@ -136,7 +134,7 @@ def get_prompts():
         params.extend([f'%{search}%', f'%{search}%'])
     
    
-    query += " ORDER BY created DESC"
+    query += " ORDER BY date_creee DESC"
     
     try:
         cur.execute(query, params)
@@ -146,9 +144,9 @@ def get_prompts():
             'id': p[0], 
             'titre': p[1], 
             'description': p[2], 
-            'prix': p[4], 
-            'etat': p[3],
-            'date_creee': p[6].strftime('%Y-%m-%d %H:%M:%S') if p[6] else None
+            'prix': p[3], 
+            'etat': p[4],
+            'date_creee': p[5].strftime('%Y-%m-%d %H:%M:%S') if p[5] else None
         } for p in prompts])
     except Exception as e:
         return jsonify({'error': str(e)}), 400
@@ -158,10 +156,9 @@ def get_prompts():
 
 
 @prompt_bp.route('/admin/prompts', methods=['GET'])
-@jwt_required()
-def get_admin_prompts():
-    user = get_jwt_identity()
-    if user['role'] != 'admin':
+@token_required
+def get_admin_prompts(current_user):
+    if current_user['role'] != 'admin':
         return jsonify({'msg': 'Accès interdit'}), 403
     
     etat = request.args.get('etat', '')
@@ -192,10 +189,10 @@ def get_admin_prompts():
             'id': p[0], 
             'titre': p[1], 
             'description': p[2], 
-            'prix': p[4], 
-            'etat': p[3],
-            'date_creee': p[6].strftime('%Y-%m-%d %H:%M:%S') if p[6] else None,
-            'auteur': p[5]
+            'prix': p[3], 
+            'etat': p[4],
+            'date_creee': p[5].strftime('%Y-%m-%d %H:%M:%S') if p[5] else None,
+            'auteur': p[6]
         } for p in prompts])
     except Exception as e:
         return jsonify({'error': str(e)}), 400
@@ -232,10 +229,10 @@ def get_prompt_detail(prompt_id):
             'id': p[0], 
             'titre': p[1], 
             'description': p[2], 
-            'prix': p[4], 
-            'etat': p[3],
-            'date_creee': p[6].strftime('%Y-%m-%d %H:%M:%S') if p[6] else None,
-            'auteur': p[5],
+            'prix': p[3], 
+            'etat': p[4],
+            'date_creee': p[5].strftime('%Y-%m-%d %H:%M:%S') if p[5] else None,
+            'auteur': p[6],
             'note_moyenne': float(avg_score) if avg_score else 0,
             'nombre_votes': vote_count
         })
@@ -246,9 +243,8 @@ def get_prompt_detail(prompt_id):
         conn.close()
        
 @prompt_bp.route('/prompts/<int:prompt_id>/vote', methods=['POST'])
-@jwt_required()
-def vote_prompt(prompt_id):
-    user = get_jwt_identity()
+@token_required
+def vote_prompt(current_user,prompt_id):
     conn = conn_db()
     cur = conn.cursor()
 
@@ -266,7 +262,7 @@ def vote_prompt(prompt_id):
             return jsonify({'msg': 'Ce prompt n\'est pas en état de rappel et ne peut pas être voté'}), 400
 
         
-        voter_id = user['id']
+        voter_id = current_user['id']
         if voter_id == owner_id:
             return jsonify({'msg': 'Impossible de voter pour votre propre prompt'}), 403
 
@@ -300,9 +296,8 @@ def vote_prompt(prompt_id):
         conn.close()
 
 @prompt_bp.route('/prompts/<int:prompt_id>/note', methods=['POST'])
-@jwt_required()
-def note_prompt(prompt_id):
-    user = get_jwt_identity()
+@token_required
+def note_prompt(current_user,prompt_id):
     data = request.get_json()
     
     if 'score' not in data:
@@ -310,12 +305,12 @@ def note_prompt(prompt_id):
         
     score = int(data['score'])
 
-    if score < -10 or score > 10:
+    if score <= -10 or score >= 10:
         return jsonify({'msg': 'Le score doit être entre -10 et 10'}), 400
 
     conn = conn_db()
     cur = conn.cursor()
-    cur.execute("SELECT id FROM users WHERE email = %s", (user['email'],))
+    cur.execute("SELECT id FROM users WHERE email = %s", (current_user['email'],))
     note_id = cur.fetchone()[0]
     cur.execute("SELECT id_user FROM prompts WHERE id = %s", (prompt_id,))
     owner_id = cur.fetchone()[0]
